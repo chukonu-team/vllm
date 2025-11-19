@@ -75,6 +75,7 @@ from .utils import (AutoWeightsLoader, WeightsMapper,
                     init_vllm_registered_model, maybe_prefix,
                     merge_multimodal_embeddings)
 from .vision import get_vit_attn_backend, run_dp_sharded_mrope_vision_model
+import math
 
 logger = init_logger(__name__)
 
@@ -1382,6 +1383,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, SupportsMultiModal,
                                                          grid_thw_list,
                                                          rope_type="rope_3d")
             else:
+                print(f"VisualModel inference {pixel_values.shape} {math.prod(pixel_values.shape)}")
                 image_embeds = self.visual(pixel_values,
                                            grid_thw=grid_thw_list)
 

@@ -2295,6 +2295,13 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         ), record_function_or_nullcontext("Forward"),
               self.maybe_get_kv_connector_output(scheduler_output) as
               kv_connector_output):
+            assert(input_ids == None) # 多模态模型下，强制使用inputs_embeds
+            input_shape = inputs_embeds.shape
+
+            num_active_requests = len(scheduler_output.num_scheduled_tokens)
+            num_encoder_inputs = len(scheduler_output.scheduled_encoder_inputs)
+            num_scheduled_tokens_decode = {len([k for k, v in scheduler_output.num_scheduled_tokens.items() if v == 1])}
+            print(f"LanguageModel inference | input_shape {input_shape} num_scheduled_tokens {num_scheduled_tokens} num_scheduled_tokens_decode {num_scheduled_tokens_decode} num_active_requests {num_active_requests} num_encoder_inputs {num_encoder_inputs} cudagraph_runtime_mode {cudagraph_runtime_mode}")
             model_output = self.model(
                 input_ids=input_ids,
                 positions=positions,
