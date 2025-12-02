@@ -68,6 +68,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import uses_mrope
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.utils.tensor_schema import TensorSchema, TensorShape
+from vllm.utils.myprofile import mylog, profile_busyloop
 
 from .interfaces import (MultiModalEmbeddings, SupportsLoRA, SupportsMRoPE,
                          SupportsMultiModal, SupportsPP)
@@ -1383,7 +1384,10 @@ class Qwen2VLForConditionalGeneration(nn.Module, SupportsMultiModal,
                                                          grid_thw_list,
                                                          rope_type="rope_3d")
             else:
-                print(f"VisualModel inference {pixel_values.shape} {math.prod(pixel_values.shape)}")
+                mylog(f"VisualModel inference {pixel_values.shape} {math.prod(pixel_values.shape)}")
+                def fn():
+                    self.visual(pixel_values, grid_thw=grid_thw_list)
+                profile_busyloop("VisualModel", fn)
                 image_embeds = self.visual(pixel_values,
                                            grid_thw=grid_thw_list)
 

@@ -65,6 +65,7 @@ from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, DeviceMemoryProfiler,
                         is_pin_memory_available,
                         length_from_prompt_token_ids_or_embeds, round_up,
                         supports_dynamo)
+from vllm.utils.myprofile import mylog, profile_busyloop
 from vllm.utils.jsontree import json_map_leaves
 from vllm.v1.attention.backends.flash_attn import AttentionMetadata
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadataBuilder
@@ -2301,7 +2302,17 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             num_active_requests = len(scheduler_output.num_scheduled_tokens)
             num_encoder_inputs = len(scheduler_output.scheduled_encoder_inputs)
             num_scheduled_tokens_decode = {len([k for k, v in scheduler_output.num_scheduled_tokens.items() if v == 1])}
-            print(f"LanguageModel inference | input_shape {input_shape} num_scheduled_tokens {num_scheduled_tokens} num_scheduled_tokens_decode {num_scheduled_tokens_decode} num_active_requests {num_active_requests} num_encoder_inputs {num_encoder_inputs} cudagraph_runtime_mode {cudagraph_runtime_mode}")
+            mylog(f"LanguageModel inference | input_shape {input_shape} num_scheduled_tokens {num_scheduled_tokens} num_scheduled_tokens_decode {num_scheduled_tokens_decode} num_active_requests {num_active_requests} num_encoder_inputs {num_encoder_inputs} cudagraph_runtime_mode {cudagraph_runtime_mode}")
+            def fn():
+                self.model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                    **model_kwargs,
+                )
+            profile_busyloop("LanguageModel", fn)
+
             model_output = self.model(
                 input_ids=input_ids,
                 positions=positions,
