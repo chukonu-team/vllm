@@ -51,6 +51,11 @@ from vllm.v1.request import Request, RequestStatus
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
+from vllm.utils.cuda_profiling import *
+
+import vllm.v1.executor.uniproc_executor
+import dataclasses
+import json
 
 logger = init_logger(__name__)
 
@@ -166,6 +171,12 @@ class EngineCore:
         self.step_fn = (self.step if self.batch_queue is None else
                         self.step_with_batch_queue)
 
+        self.cuda_profiling_context = CudaProfilingContext()
+        assert(isinstance(self.model_executor, vllm.v1.executor.uniproc_executor.UniProcExecutor))
+        self.model_executor.driver_worker.worker.model_runner.cuda_profiling_context = self.cuda_profiling_context
+        self.profiling_statitics_fileh = open("profiling_statitics.json", "w", buffering=4096)
+        
+
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
         start = time.time()
@@ -276,17 +287,41 @@ class EngineCore:
         was executed.
         """
 
+        bt = time.time()
+        cuda_profiling_context = self.cuda_profiling_context
+        cuda_profiling_context.start.record()
+
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
+        t1 = time.time()
         model_output = self.execute_model_with_error_logging(
             self.model_executor.execute_model,  # type: ignore
             scheduler_output)
+
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output)  # type: ignore
 
+        et = time.time()
+        step_time_ms = 1e3*(et-bt)
+        schedule_time_ms = 1e3*(t1-bt)
+        model_preprocess_time_ms = cuda_profiling_context.start.elapsed_time(cuda_profiling_context.before_model_forward)
+        model_forward_time_ms = cuda_profiling_context.before_model_forward.elapsed_time(cuda_profiling_context.after_model_forward)
+        model_postprocess_time_ms = cuda_profiling_context.after_model_forward.elapsed_time(cuda_profiling_context.after_postprocess)
+
+        runner_stats = StepStatistics(runner_stats=self.model_executor.driver_worker.worker.model_runner.gpu_model_runner_statistics, 
+                                      step_time_ms=step_time_ms, 
+                                      schedule_time_ms=schedule_time_ms, 
+                                      model_preprocess_time_ms=model_preprocess_time_ms, 
+                                      model_forward_time_ms=model_forward_time_ms,
+                                      model_postprocess_time_ms=model_postprocess_time_ms)
+        runner_stats_json = json.dumps(dataclasses.asdict(runner_stats))
+        # print(f"Step Time: {step_time_ms} ms [ schedule {schedule_time_ms} prep {model_preprocess_time_ms} forward {model_forward_time_ms} post {model_postprocess_time_ms} ]")
+        print(runner_stats_json)
+        self.profiling_statitics_fileh.write(runner_stats_json)
+        self.profiling_statitics_fileh.write("\n")
         return (engine_core_outputs,
                 scheduler_output.total_num_scheduled_tokens > 0)
 

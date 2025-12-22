@@ -108,6 +108,7 @@ from vllm.v1.worker.ubatch_splitting import (check_ubatch_thresholds,
                                              ubatch_split)
 from vllm.v1.worker.ubatch_utils import UBatchSlice, UBatchSlices
 from vllm.v1.worker.utils import is_residual_scattered_for_sp
+from vllm.utils.cuda_profiling import CudaProfilingContext, GpuModelRunnerStatistics, CudaGraphKey
 
 from .utils import (AttentionGroup, MultiModalBudget,
                     add_kv_sharing_layers_to_kv_cache_groups, bind_kv_cache,
@@ -2233,6 +2234,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, AsyncModelRunnerOutput, IntermediateTensors]:
+        cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
+        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+    
         with record_function_or_nullcontext("Preprocess"):
             with self.synchronize_input_prep():
                 # Update persistent batch states.
@@ -2295,6 +2299,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         ), record_function_or_nullcontext("Forward"),
               self.maybe_get_kv_connector_output(scheduler_output) as
               kv_connector_output):
+            cuda_profiling_context.before_model_forward.record()
             model_output = self.model(
                 input_ids=input_ids,
                 positions=positions,
@@ -2302,6 +2307,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 inputs_embeds=inputs_embeds,
                 **model_kwargs,
             )
+            cuda_profiling_context.after_model_forward.record()
 
         with record_function_or_nullcontext("Postprocess"):
             if self.use_aux_hidden_state_outputs:
@@ -2362,6 +2368,61 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             if scheduler_output.grammar_bitmask is not None:
                 apply_grammar_bitmask(scheduler_output, self.input_batch,
                                       logits, self.device)
+
+        self.execute_model_state = ExecuteModelState(
+            scheduler_output,
+            logits,
+            spec_decode_metadata,
+            spec_decode_common_attn_metadata,
+            hidden_states,
+            sample_hidden_states,
+            aux_hidden_states,
+            ec_connector_output,
+        )
+
+        cuda_profiling_context.after_postprocess.record()
+        self.gpu_model_runner_statistics = None
+
+        if True:
+            assert(input_ids != None) # 非多模态模型下，应当使用input_ids
+            assert(len(input_ids.shape) == 1)
+            total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+            num_active_requests = len(scheduler_output.num_scheduled_tokens)
+            scheduled_cached_reqs = len(scheduler_output.scheduled_cached_reqs.req_ids)
+            scheduled_new_reqs = len(scheduler_output.scheduled_new_reqs)
+            cudagraph_key = CudaGraphKey(batch_descriptor.num_tokens, batch_descriptor.uniform_decode, batch_descriptor.has_lora) if batch_descriptor else None
+            running_request_ids = list(scheduler_output.num_scheduled_tokens)
+            num_scheduled_tokens = [scheduler_output.num_scheduled_tokens[req] for req in running_request_ids]
+            assert(len(scheduler_output.scheduled_cached_reqs.req_ids) == len(scheduler_output.scheduled_cached_reqs.num_computed_tokens))
+            num_computed_tokens_dict = {k: v for (k, v) in zip(scheduler_output.scheduled_cached_reqs.req_ids, scheduler_output.scheduled_cached_reqs.num_computed_tokens)}
+            for req in scheduler_output.scheduled_new_reqs:
+                num_computed_tokens_dict[req.req_id] = req.num_computed_tokens
+            num_computed_tokens = [num_computed_tokens_dict[req] for req in running_request_ids]
+
+            # 计算实际占用的K/V大小
+            req_id_to_index = self.input_batch.req_id_to_index
+            req_index_to_num_blocks = self.input_batch.block_table[0].num_blocks_per_row
+            block_table = self.input_batch.block_table[0].block_table.cpu # Tensor [256, 2560]
+            used_block_id_set = set()
+            for req in running_request_ids:
+                req_idx = req_id_to_index[req]
+                req_num_blocks = req_index_to_num_blocks[req_idx]
+                for i in range(req_num_blocks):
+                    used_block_id_set.add(block_table[req_idx, i])
+            active_num_pages = len(used_block_id_set)
+
+            self.gpu_model_runner_statistics = GpuModelRunnerStatistics(
+                total_num_scheduled_tokens=total_num_scheduled_tokens,
+                num_active_requests=num_active_requests,
+                cudagraph_runtime_mode=str(cudagraph_runtime_mode),
+                cudagraph_key=cudagraph_key,
+                scheduled_cached_reqs=scheduled_cached_reqs,
+                scheduled_new_reqs=scheduled_new_reqs,
+                running_request_ids=running_request_ids,
+                num_scheduled_tokens=num_scheduled_tokens,
+                num_computed_tokens=num_computed_tokens,
+                active_num_pages=active_num_pages
+            )
 
         with record_function_or_nullcontext("Sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
