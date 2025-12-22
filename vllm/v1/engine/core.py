@@ -64,6 +64,8 @@ from vllm.v1.request import Request, RequestStatus
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
+from vllm.utils.cuda_profiling import CudaProfilingContext
+import vllm.v1.executor.uniproc_executor
 
 logger = init_logger(__name__)
 
@@ -206,6 +208,11 @@ class EngineCore:
         # Reduces pause times of oldest generation collections.
         freeze_gc_heap()
 
+        self.cuda_profiling_context = CudaProfilingContext()
+        assert(isinstance(self.model_executor, vllm.v1.executor.uniproc_executor.UniProcExecutor))
+        self.model_executor.driver_worker.worker.model_runner.cuda_profiling_context = self.cuda_profiling_context
+        
+
     def _initialize_kv_caches(
         self, vllm_config: VllmConfig
     ) -> tuple[int, int, KVCacheConfig]:
@@ -332,6 +339,8 @@ class EngineCore:
         """
 
         bt = time.time()
+        cuda_profiling_context = self.cuda_profiling_context
+        cuda_profiling_context.start.record()
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
@@ -340,7 +349,6 @@ class EngineCore:
         scheduler_output = self.scheduler.schedule()
         t1 = time.time()
         future = self.model_executor.execute_model(scheduler_output, non_block=True)
-        t2 = time.time()
         grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
         with self.log_error_detail(scheduler_output):
             model_output = future.result()
@@ -352,7 +360,12 @@ class EngineCore:
         )
 
         et = time.time()
-        print(f"Step Time: {1e3*(et-bt)} ms [ schedule {1e3*(t1-bt)} execute {1e3*(t2-t1)} update {1e3*(et-t2)}  ]")
+        step_time_ms = 1e3*(et-bt)
+        schedule_time_ms = 1e3*(t1-bt)
+        model_preprocess_time_ms = cuda_profiling_context.start.elapsed_time(cuda_profiling_context.before_model_forward)
+        model_forward_time_ms = cuda_profiling_context.before_model_forward.elapsed_time(cuda_profiling_context.after_model_forward)
+        model_postprocess_time_ms = cuda_profiling_context.after_model_forward.elapsed_time(cuda_profiling_context.after_postprocess)
+        print(f"Step Time: {step_time_ms} ms [ schedule {schedule_time_ms} prep {model_preprocess_time_ms} forward {model_forward_time_ms} post {model_postprocess_time_ms} ]")
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
