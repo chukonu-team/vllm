@@ -331,12 +331,16 @@ class EngineCore:
         was executed.
         """
 
+        bt = time.time()
+
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
+        t1 = time.time()
         future = self.model_executor.execute_model(scheduler_output, non_block=True)
+        t2 = time.time()
         grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
         with self.log_error_detail(scheduler_output):
             model_output = future.result()
@@ -346,6 +350,9 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+
+        et = time.time()
+        print(f"Step Time: {1e3*(et-bt)} ms [ schedule {1e3*(t1-bt)} execute {1e3*(t2-t1)} update {1e3*(et-t2)}  ]")
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 

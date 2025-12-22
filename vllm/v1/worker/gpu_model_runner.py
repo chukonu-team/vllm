@@ -2628,6 +2628,13 @@ class GPUModelRunner(
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: IntermediateTensors | None = None,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        cuda_event_1 = torch.cuda.Event(enable_timing=True)
+        cuda_event_2 = torch.cuda.Event(enable_timing=True)
+        cuda_event_3 = torch.cuda.Event(enable_timing=True)
+        cuda_event_4 = torch.cuda.Event(enable_timing=True)
+
+        cuda_event_1.record()
+
         if self.execute_model_state is not None:
             raise RuntimeError(
                 "State error: sample_tokens() must be called "
@@ -2792,6 +2799,7 @@ class GPUModelRunner(
             record_function_or_nullcontext("gpu_model_runner: forward"),
             self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
         ):
+            cuda_event_2.record()
             model_output = self._model_forward(
                 input_ids=input_ids,
                 positions=positions,
@@ -2799,6 +2807,7 @@ class GPUModelRunner(
                 inputs_embeds=inputs_embeds,
                 **model_kwargs,
             )
+            cuda_event_3.record()
 
         with record_function_or_nullcontext("gpu_model_runner: postprocess"):
             if self.use_aux_hidden_state_outputs:
@@ -2869,6 +2878,41 @@ class GPUModelRunner(
             ec_connector_output,
         )
         self.kv_connector_output = kv_connector_output
+
+        cuda_event_4.record()
+        cuda_event_4.synchronize()
+        prep_time_ms = cuda_event_1.elapsed_time(cuda_event_2)
+        compute_time_ms = cuda_event_2.elapsed_time(cuda_event_3)
+        postp_time_ms = cuda_event_3.elapsed_time(cuda_event_4)
+        assert(input_ids != None) # 非多模态模型下，应当使用input_ids
+        assert(len(input_ids.shape) == 1)
+        total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+        num_active_requests = len(scheduler_output.num_scheduled_tokens)
+        scheduled_cached_reqs = len(scheduler_output.scheduled_cached_reqs.req_ids)
+        scheduled_new_reqs = len(scheduler_output.scheduled_new_reqs)
+        cudagraph_key = f"{batch_descriptor.num_tokens},{batch_descriptor.uniform_decode},{batch_descriptor.has_lora}" if batch_descriptor else 'None'
+        running_request_ids = list(scheduler_output.num_scheduled_tokens)
+        running_request_ids_str = ",".join(running_request_ids)
+        num_scheduled_tokens = ",".join([str(scheduler_output.num_scheduled_tokens[req]) for req in running_request_ids])
+        assert(len(scheduler_output.scheduled_cached_reqs.req_ids) == len(scheduler_output.scheduled_cached_reqs.num_computed_tokens))
+        num_computed_tokens_dict = {k: v for (k, v) in zip(scheduler_output.scheduled_cached_reqs.req_ids, scheduler_output.scheduled_cached_reqs.num_computed_tokens)}
+        for req in scheduler_output.scheduled_new_reqs:
+            num_computed_tokens_dict[req.req_id] = req.num_computed_tokens
+        num_computed_tokens = ",".join([str(num_computed_tokens_dict[req]) for req in running_request_ids])
+
+        # 计算实际占用的K/V大小
+        req_id_to_index = self.input_batch.req_id_to_index
+        req_index_to_num_blocks = self.input_batch.block_table[0].num_blocks_per_row
+        block_table = self.input_batch.block_table[0].block_table.cpu # Tensor [256, 2560]
+        used_block_id_set = set()
+        for req in running_request_ids:
+            req_idx = req_id_to_index[req]
+            req_num_blocks = req_index_to_num_blocks[req_idx]
+            for i in range(req_num_blocks):
+                used_block_id_set.add(block_table[req_idx, i])
+        active_num_pages = len(used_block_id_set)
+
+        print(f"LanguageModel inference | total_num_scheduled_tokens {total_num_scheduled_tokens} num_active_requests {num_active_requests} cudagraph_runtime_mode {cudagraph_runtime_mode} cudagraph_key {cudagraph_key} scheduled_cached_reqs {scheduled_cached_reqs} scheduled_new_reqs {scheduled_new_reqs} prep_time_ms {prep_time_ms} compute_time_ms {compute_time_ms} postp_time_ms {postp_time_ms} running_request_ids {running_request_ids_str} num_scheduled_tokens {num_scheduled_tokens} num_computed_tokens {num_computed_tokens} active_num_pages {active_num_pages}")
         return None
 
     @torch.inference_mode
