@@ -82,6 +82,7 @@ from vllm.utils.counter import Counter
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.llm_engine import LLMEngine
 from vllm.v1.sample.logits_processor import LogitsProcessor
+import time
 
 if TYPE_CHECKING:
     from vllm.v1.metrics.reader import Metric
@@ -437,6 +438,7 @@ class LLM:
         # Add any modality specific loras to the corresponding prompts
         lora_request = self._get_modality_specific_lora_reqs(prompts, lora_request)
 
+        bt = time.time()
         self._validate_and_add_requests(
             prompts=prompts,
             params=sampling_params,
@@ -445,7 +447,25 @@ class LLM:
             priority=priority,
         )
 
-        outputs = self._run_engine(use_tqdm=use_tqdm)
+        outputs: list[RequestOutput] = self._run_engine(use_tqdm=use_tqdm)
+        et = time.time()
+        llm_inference_walltime_sec = et - bt
+
+        total_in_toks = 0
+        total_out_toks = 0
+        for output in outputs:
+            # Calculate tokens only for RequestOutput
+            n = len(output.outputs)
+            assert output.prompt_token_ids is not None
+            total_in_toks += len(output.prompt_token_ids) * n
+            total_out_toks += sum(
+                len(stp.token_ids) for stp in output.outputs
+            )
+        in_spd = total_in_toks / llm_inference_walltime_sec
+        out_spd = total_out_toks / llm_inference_walltime_sec
+        tot_spd = (total_in_toks + total_out_toks) / llm_inference_walltime_sec
+        print(f"LLM generate of {len(prompts)} requests finished in {llm_inference_walltime_sec} seconds: {total_in_toks} input tokens ( {in_spd} tok/s ) {total_out_toks} output tokens ( {out_spd} tok/s )  total average {tot_spd} tok/s")
+
         return self.engine_class.validate_outputs(outputs, RequestOutput)
 
     def _get_modality_specific_lora_reqs(
