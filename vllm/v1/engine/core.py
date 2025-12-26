@@ -43,7 +43,7 @@ from vllm.v1.engine import (EngineCoreOutputs, EngineCoreRequest,
                             UtilityOutput, UtilityResult)
 from vllm.v1.engine.utils import (EngineHandshakeMetadata, EngineZmqAddresses,
                                   get_device_indices)
-from vllm.v1.executor.abstract import Executor
+from vllm.v1.executor.abstract import Executor, UniProcExecutor
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
@@ -53,7 +53,6 @@ from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
 from vllm.utils.cuda_profiling import *
 
-import vllm.v1.executor.uniproc_executor
 import dataclasses
 import json
 
@@ -172,7 +171,7 @@ class EngineCore:
                         self.step_with_batch_queue)
 
         self.cuda_profiling_context = CudaProfilingContext()
-        assert(isinstance(self.model_executor, vllm.v1.executor.uniproc_executor.UniProcExecutor))
+        assert(isinstance(self.model_executor, UniProcExecutor))
         self.model_executor.driver_worker.worker.model_runner.cuda_profiling_context = self.cuda_profiling_context
         self.profiling_statitics_fileh = open("profiling_statitics.json", "w", buffering=4096)
         

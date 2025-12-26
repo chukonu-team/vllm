@@ -2235,7 +2235,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, AsyncModelRunnerOutput, IntermediateTensors]:
         cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
-        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
     
         with record_function_or_nullcontext("Preprocess"):
             with self.synchronize_input_prep():
@@ -2369,30 +2368,17 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 apply_grammar_bitmask(scheduler_output, self.input_batch,
                                       logits, self.device)
 
-        self.execute_model_state = ExecuteModelState(
-            scheduler_output,
-            logits,
-            spec_decode_metadata,
-            spec_decode_common_attn_metadata,
-            hidden_states,
-            sample_hidden_states,
-            aux_hidden_states,
-            ec_connector_output,
-        )
-
         cuda_profiling_context.after_postprocess.record()
         self.gpu_model_runner_statistics = None
 
         if True:
-            assert(input_ids != None) # 非多模态模型下，应当使用input_ids
-            assert(len(input_ids.shape) == 1)
             total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
             num_active_requests = len(scheduler_output.num_scheduled_tokens)
             scheduled_cached_reqs = len(scheduler_output.scheduled_cached_reqs.req_ids)
             scheduled_new_reqs = len(scheduler_output.scheduled_new_reqs)
-            cudagraph_key = CudaGraphKey(batch_descriptor.num_tokens, batch_descriptor.uniform_decode, batch_descriptor.has_lora) if batch_descriptor else None
+            cudagraph_key = CudaGraphKey(batch_descriptor.num_tokens, batch_descriptor.uniform_decode, has_lora=False) if batch_descriptor else None
             running_request_ids = list(scheduler_output.num_scheduled_tokens)
-            num_scheduled_tokens = [scheduler_output.num_scheduled_tokens[req] for req in running_request_ids]
+            num_scheduled_tokens_array = [scheduler_output.num_scheduled_tokens[req] for req in running_request_ids]
             assert(len(scheduler_output.scheduled_cached_reqs.req_ids) == len(scheduler_output.scheduled_cached_reqs.num_computed_tokens))
             num_computed_tokens_dict = {k: v for (k, v) in zip(scheduler_output.scheduled_cached_reqs.req_ids, scheduler_output.scheduled_cached_reqs.num_computed_tokens)}
             for req in scheduler_output.scheduled_new_reqs:
@@ -2419,7 +2405,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 scheduled_cached_reqs=scheduled_cached_reqs,
                 scheduled_new_reqs=scheduled_new_reqs,
                 running_request_ids=running_request_ids,
-                num_scheduled_tokens=num_scheduled_tokens,
+                num_scheduled_tokens=num_scheduled_tokens_array,
                 num_computed_tokens=num_computed_tokens,
                 active_num_pages=active_num_pages
             )
