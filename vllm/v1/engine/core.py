@@ -310,7 +310,12 @@ class EngineCore:
         model_forward_time_ms = cuda_profiling_context.before_model_forward.elapsed_time(cuda_profiling_context.after_model_forward)
         model_postprocess_time_ms = cuda_profiling_context.after_model_forward.elapsed_time(cuda_profiling_context.after_postprocess)
 
+        mm_encoder_statistics: Optional[MMEncoderStatistics] = cuda_profiling_context.mm_encoder_statistics
+        if mm_encoder_statistics is not None:
+            mm_encoder_statistics.time_ms = cuda_profiling_context.before_mm_encode.elapsed_time(cuda_profiling_context.after_mm_encode)
+
         runner_stats = StepStatistics(runner_stats=self.model_executor.driver_worker.worker.model_runner.gpu_model_runner_statistics, 
+                                      mm_encoder_statistics=mm_encoder_statistics,
                                       step_time_ms=step_time_ms, 
                                       schedule_time_ms=schedule_time_ms, 
                                       model_preprocess_time_ms=model_preprocess_time_ms, 

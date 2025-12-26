@@ -108,7 +108,7 @@ from vllm.v1.worker.ubatch_splitting import (check_ubatch_thresholds,
                                              ubatch_split)
 from vllm.v1.worker.ubatch_utils import UBatchSlice, UBatchSlices
 from vllm.v1.worker.utils import is_residual_scattered_for_sp
-from vllm.utils.cuda_profiling import CudaProfilingContext, GpuModelRunnerStatistics, CudaGraphKey
+from vllm.utils.cuda_profiling import CudaProfilingContext, GpuModelRunnerStatistics, CudaGraphKey, MMEncoderStatistics
 
 from .utils import (AttentionGroup, MultiModalBudget,
                     add_kv_sharing_layers_to_kv_cache_groups, bind_kv_cache,
@@ -1539,6 +1539,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         return mm_kwargs, mm_hashes_pos
 
     def _execute_mm_encoder(self, scheduler_output: "SchedulerOutput"):
+        cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
+
         # Batch the multi-modal inputs using the helper method.
         mm_kwargs, mm_hashes_pos = self._batch_mm_kwargs_from_scheduler(
             scheduler_output)
@@ -1555,6 +1557,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # encoder outputs.
         model = cast(SupportsMultiModal, self.model)
         encoder_outputs = []
+        cuda_profiling_context.mm_encoder_statistics = None
         for modality, num_items, mm_kwargs_group in group_mm_kwargs_by_modality(
                 mm_kwargs,
                 device=self.device,
@@ -1570,6 +1573,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             curr_group_outputs = []
 
             if self.is_multimodal_pruning_enabled and modality == "video":
+                # MinerU模型永远都不是video
+                assert False
                 micro_batch_size = 1
                 for i in range(0, num_items, micro_batch_size):
                     micro_batch_mm_inputs = dict(
@@ -1588,8 +1593,20 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 # 2. A list or tuple (length: num_items) of tensors,
                 # each of shape (feature_size, hidden_size) in case the feature
                 # size is dynamic depending on the input multimodal items.
+                assert(cuda_profiling_context.mm_encoder_statistics is None)
+                cuda_profiling_context.before_mm_encode.record()
                 curr_group_outputs = model.get_multimodal_embeddings(
                     **mm_kwargs_group)
+                cuda_profiling_context.after_mm_encode.record()
+                request_ids: list[str] = list(scheduler_output.scheduled_encoder_inputs)
+                per_request_num_images: list[int] = [len(scheduler_output.scheduled_encoder_inputs[req]) for req in request_ids]
+                input_shape: list[int] = list(mm_kwargs_group["pixel_values"].shape)
+                cuda_profiling_context.mm_encoder_statistics = MMEncoderStatistics(
+                    request_ids=request_ids,
+                    per_request_num_images=per_request_num_images,
+                    input_shape=input_shape,
+                    time_ms=0.0
+                )
 
             sanity_check_mm_encoder_outputs(
                 curr_group_outputs,
