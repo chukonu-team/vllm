@@ -1540,6 +1540,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
     def _execute_mm_encoder(self, scheduler_output: "SchedulerOutput"):
         cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
+        cuda_profiling_context.mm_encoder_statistics = None
 
         # Batch the multi-modal inputs using the helper method.
         mm_kwargs, mm_hashes_pos = self._batch_mm_kwargs_from_scheduler(
@@ -1557,7 +1558,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # encoder outputs.
         model = cast(SupportsMultiModal, self.model)
         encoder_outputs = []
-        cuda_profiling_context.mm_encoder_statistics = None
         for modality, num_items, mm_kwargs_group in group_mm_kwargs_by_modality(
                 mm_kwargs,
                 device=self.device,

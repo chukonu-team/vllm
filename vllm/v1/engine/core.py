@@ -314,6 +314,10 @@ class EngineCore:
         if mm_encoder_statistics is not None:
             mm_encoder_statistics.time_ms = cuda_profiling_context.before_mm_encode.elapsed_time(cuda_profiling_context.after_mm_encode)
 
+            # 猜想：编码的时间被包含在了整个步骤中
+            if not (mm_encoder_statistics.time_ms < step_time_ms):
+                print("WARN: 编码的时间不应大于整个步骤的时间")
+
         runner_stats = StepStatistics(runner_stats=self.model_executor.driver_worker.worker.model_runner.gpu_model_runner_statistics, 
                                       mm_encoder_statistics=mm_encoder_statistics,
                                       step_time_ms=step_time_ms, 
