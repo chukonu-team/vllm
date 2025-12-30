@@ -2419,10 +2419,19 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     used_block_id_set.add(block_table[req_idx, i])
             active_num_pages = len(used_block_id_set)
 
+            if cudagraph_runtime_mode == CUDAGraphMode.FULL:
+                cudagraph_runtime_mode_str = "FULL"
+            elif cudagraph_runtime_mode == CUDAGraphMode.NONE:
+                cudagraph_runtime_mode_str = "NONE"
+            elif cudagraph_runtime_mode == CUDAGraphMode.PIECEWISE:
+                cudagraph_runtime_mode_str = "PIECEWISE"
+            else:
+                raise ValueError("无法识别的CUDAGraphMode")
+
             self.gpu_model_runner_statistics = GpuModelRunnerStatistics(
                 total_num_scheduled_tokens=total_num_scheduled_tokens,
                 num_active_requests=num_active_requests,
-                cudagraph_runtime_mode=str(cudagraph_runtime_mode),
+                cudagraph_runtime_mode=cudagraph_runtime_mode_str,
                 cudagraph_key=cudagraph_key,
                 scheduled_cached_reqs=scheduled_cached_reqs,
                 scheduled_new_reqs=scheduled_new_reqs,
