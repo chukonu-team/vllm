@@ -173,7 +173,9 @@ class EngineCore:
         self.cuda_profiling_context = CudaProfilingContext()
         assert(isinstance(self.model_executor, UniProcExecutor))
         self.model_executor.driver_worker.worker.model_runner.cuda_profiling_context = self.cuda_profiling_context
-        self.profiling_statitics_fileh = open("profiling_statitics.json", "w", buffering=4096)
+        self.profiling_statitics_dump_to_stdout = int(os.environ.get("MY_VLLM_PROFILING_STATISTICS_DISPLAY_TO_STDOUT", "0")) > 0
+        self.profiling_statitics_path = os.environ.get("MY_VLLM_PROFILING_STATISTICS_PATH", "profiling_statitics.json")
+        self.profiling_statitics_fileh = open(self.profiling_statitics_path, "w", buffering=4096)
         
 
     def _initialize_kv_caches(
@@ -327,7 +329,8 @@ class EngineCore:
                                       model_postprocess_time_ms=model_postprocess_time_ms)
         runner_stats_json = json.dumps(dataclasses.asdict(runner_stats))
         # print(f"Step Time: {step_time_ms} ms [ schedule {schedule_time_ms} prep {model_preprocess_time_ms} forward {model_forward_time_ms} post {model_postprocess_time_ms} ]")
-        print(runner_stats_json)
+        if self.profiling_statitics_dump_to_stdout:
+            print(runner_stats_json)
         self.profiling_statitics_fileh.write(runner_stats_json)
         self.profiling_statitics_fileh.write("\n")
         return (engine_core_outputs,
