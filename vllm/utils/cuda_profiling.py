@@ -20,7 +20,7 @@ class CudaProfilingContext:
 class MMEncoderStatistics:
     request_ids: list[str]
     per_request_num_images: list[int]
-    input_shape: list[int]
+    input_shapes: list[list[int]]
     time_ms: float
 
 @dataclass

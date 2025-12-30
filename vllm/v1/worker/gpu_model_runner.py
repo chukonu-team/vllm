@@ -1600,11 +1600,16 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 cuda_profiling_context.after_mm_encode.record()
                 request_ids: list[str] = list(scheduler_output.scheduled_encoder_inputs)
                 per_request_num_images: list[int] = [len(scheduler_output.scheduled_encoder_inputs[req]) for req in request_ids]
-                input_shape: list[int] = list(mm_kwargs_group["pixel_values"].shape)
+                if isinstance(mm_kwargs_group["pixel_values"], torch.Tensor):
+                    input_shapes: list[list[int]] = [list(mm_kwargs_group["pixel_values"].shape)]
+                else:
+                    assert(isinstance(mm_kwargs_group["pixel_values"][0], torch.Tensor))
+                    input_shapes: list[list[int]] = sorted([list(x.shape) for x in mm_kwargs_group["pixel_values"]])
+                
                 cuda_profiling_context.mm_encoder_statistics = MMEncoderStatistics(
                     request_ids=request_ids,
                     per_request_num_images=per_request_num_images,
-                    input_shape=input_shape,
+                    input_shapes=input_shapes,
                     time_ms=0.0
                 )
 
