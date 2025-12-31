@@ -327,7 +327,8 @@ class EngineCore:
                                       schedule_time_ms=schedule_time_ms, 
                                       model_preprocess_time_ms=model_preprocess_time_ms, 
                                       model_forward_time_ms=model_forward_time_ms,
-                                      model_postprocess_time_ms=model_postprocess_time_ms)
+                                      model_postprocess_time_ms=model_postprocess_time_ms,
+                                      step_timestamp=1e3*begin_ts_sec)
         runner_stats_json = json.dumps(dataclasses.asdict(runner_stats))
         # print(f"Step Time: {step_time_ms} ms [ schedule {schedule_time_ms} prep {model_preprocess_time_ms} forward {model_forward_time_ms} post {model_postprocess_time_ms} ]")
         if self.profiling_statitics_dump_to_stdout:

@@ -51,3 +51,4 @@ class StepStatistics:
     model_preprocess_time_ms: float
     model_forward_time_ms: float
     model_postprocess_time_ms: float
+    step_timestamp: float
