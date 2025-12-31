@@ -288,16 +288,17 @@ class EngineCore:
         was executed.
         """
 
-        bt = time.time()
+        begin_ts_sec = time.time()
         cuda_profiling_context = self.cuda_profiling_context
-        cuda_profiling_context.start.record()
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
-        t1 = time.time()
+        after_schedule_ts_sec = time.time()
+
+        cuda_profiling_context.start.record()
         model_output = self.execute_model_with_error_logging(
             self.model_executor.execute_model,  # type: ignore
             scheduler_output)
@@ -305,9 +306,9 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output)  # type: ignore
 
-        et = time.time()
-        step_time_ms = 1e3*(et-bt)
-        schedule_time_ms = 1e3*(t1-bt)
+        end_ts_sec = time.time()
+        step_time_ms = 1e3*(end_ts_sec-begin_ts_sec)
+        schedule_time_ms = 1e3*(after_schedule_ts_sec-begin_ts_sec)
         model_preprocess_time_ms = cuda_profiling_context.start.elapsed_time(cuda_profiling_context.before_model_forward)
         model_forward_time_ms = cuda_profiling_context.before_model_forward.elapsed_time(cuda_profiling_context.after_model_forward)
         model_postprocess_time_ms = cuda_profiling_context.after_model_forward.elapsed_time(cuda_profiling_context.after_postprocess)

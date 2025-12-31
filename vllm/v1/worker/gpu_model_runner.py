@@ -1601,10 +1601,17 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 request_ids: list[str] = list(scheduler_output.scheduled_encoder_inputs)
                 per_request_num_images: list[int] = [len(scheduler_output.scheduled_encoder_inputs[req]) for req in request_ids]
                 if isinstance(mm_kwargs_group["pixel_values"], torch.Tensor):
-                    input_shapes: list[list[int]] = [list(mm_kwargs_group["pixel_values"].shape)]
+                    # 相同图片分辨率
+                    pixel_values_shape = list(mm_kwargs_group["pixel_values"].shape)
+                    assert(len(pixel_values_shape) == 3)
+                    num_images = pixel_values_shape[0]
+                    img_hw = pixel_values_shape[1:]
+                    input_shapes: list[list[int]] = [img_hw for i in range(num_images)]
                 else:
+                    # 不同图片分辨率
                     assert(isinstance(mm_kwargs_group["pixel_values"][0], torch.Tensor))
-                    input_shapes: list[list[int]] = sorted([list(x.shape) for x in mm_kwargs_group["pixel_values"]])
+                    assert(len(mm_kwargs_group["pixel_values"][0].shape) == 2)
+                    input_shapes: list[list[int]] = [list(x.shape) for x in mm_kwargs_group["pixel_values"]]
                 
                 cuda_profiling_context.mm_encoder_statistics = MMEncoderStatistics(
                     request_ids=request_ids,
