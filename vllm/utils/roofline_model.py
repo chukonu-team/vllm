@@ -145,19 +145,34 @@ if __name__ == "__main__":
     grid_thw_list = [[1, 74, 74]]
     duration_ms = 285.3724060058594
 
+    # A10G specs (bf16)
     a10g_bf16_tflops = 70
     a10g_dram_gbps = 600
 
-    device_flops_per_sec = 1e12 * a10g_bf16_tflops
-    device_bytes_per_sec = 1e9 * a10g_dram_gbps
+    peak_flops = a10g_bf16_tflops * 1e12
+    peak_bw = a10g_dram_gbps * 1e9
 
     flops = compute_flops(pixel_values_shape, grid_thw_list)
     bytes_ = compute_bytes(pixel_values_shape, grid_thw_list)
 
     AI = flops / bytes_
 
-    print(f"pixel_values_shape : {pixel_values_shape}")
-    print(f"grid_thw_list : {grid_thw_list}")
-    print(f"FLOPs : {flops/1e12:.2f} TF")
-    print(f"Bytes : {bytes_/1e9:.2f} GB")
-    print(f"AI    : {AI:.1f} FLOPs/byte")
+    achieved_flops = flops / (duration_ms * 1e-3)
+
+    roofline_bound = min(peak_flops, AI * peak_bw)
+
+    print("===== Roofline Analysis =====")
+    print(f"Tokens           : {pixel_values_shape[0]}")
+    print(f"FLOPs            : {flops/1e12:.2f} TF")
+    print(f"Bytes (HBM)      : {bytes_/1e9:.2f} GB")
+    print(f"AI               : {AI:.1f} FLOPs/byte")
+    print()
+    print(f"Peak Compute     : {peak_flops/1e12:.1f} TF/s")
+    print(f"Peak Bandwidth   : {peak_bw/1e9:.1f} GB/s")
+    print(f"Roofline Bound   : {roofline_bound/1e12:.1f} TF/s")
+    print(f"Achieved         : {achieved_flops/1e12:.1f} TF/s")
+    print()
+    if AI * peak_bw < peak_flops:
+        print("Regime           : Memory-bound")
+    else:
+        print("Regime           : Compute-bound")
