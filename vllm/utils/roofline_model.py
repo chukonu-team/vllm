@@ -1,6 +1,9 @@
-def compute_flops(
-    pixel_values_shape,
-    grid_thw_list,
+from typing import Tuple
+from dataclasses import dataclass
+
+def qwen2_vit_flops(
+    pixel_values_shape: Tuple[int, int],
+    grid_thw_list: list[list[int]],
     hidden_dim=1280,
     mlp_dim=5120,
     num_layers=32,
@@ -47,8 +50,8 @@ def compute_flops(
     return flops_patch + flops_linear + flops_attn + flops_merger
 
 
-def compute_bytes(
-    pixel_values_shape,
+def qwen2_vit_bytes(
+    pixel_values_shape: Tuple[int, int],
     grid_thw_list,
     hidden_dim=1280,
     mlp_dim=5120,
@@ -140,39 +143,73 @@ def compute_bytes(
 
     return total_bytes
 
+@dataclass
+class RooflineAnalysis:
+    pixel_values_shape: Tuple[int, int]
+    grid_thw_list: list[list[int]]
+    flops_per_call: int
+    bytes_per_call: int
+    arithmetic_intensity: float
+    roofline_bound_flops: float
+    regime: str # "memory-bound" or "compute-bound"
+
+    def achieved_flops(self, call_duration_sec: float) -> float:
+        return self.flops_per_call / call_duration_sec
+
+
+def qwen2_vit_roofline(
+    pixel_values_shape: Tuple[int, int],
+    grid_thw_list: list[list[int]],
+    peak_flops: float,
+    peak_bw: float,
+) -> RooflineAnalysis:
+    flops = qwen2_vit_flops(pixel_values_shape, grid_thw_list)
+    bytes_ = qwen2_vit_bytes(pixel_values_shape, grid_thw_list)
+    AI = flops / bytes_
+    roofline_bound = min(peak_flops, AI * peak_bw)
+    if AI * peak_bw < peak_flops:
+        regime = "memory-bound"
+    else:
+        regime = "compute-bound"
+
+    return RooflineAnalysis(
+        pixel_values_shape = pixel_values_shape,
+        grid_thw_list = grid_thw_list,
+        flops_per_call = flops,
+        bytes_per_call = bytes_,
+        arithmetic_intensity = AI,
+        roofline_bound_flops = roofline_bound,
+        regime = regime,
+    )
+
+
 if __name__ == "__main__":
     pixel_values_shape = (5476, 1176)
     grid_thw_list = [[1, 74, 74]]
     duration_ms = 285.3724060058594
 
     # A10G specs (bf16)
-    a10g_bf16_tflops = 70
-    a10g_dram_gbps = 600
+    peak_flops = 70e12      # 70 TFLOPs
+    peak_bw = 600e9         # 600 GB/s
 
-    peak_flops = a10g_bf16_tflops * 1e12
-    peak_bw = a10g_dram_gbps * 1e9
+    result = qwen2_vit_roofline(
+        pixel_values_shape=pixel_values_shape,
+        grid_thw_list=grid_thw_list,
+        peak_flops=peak_flops,
+        peak_bw=peak_bw,
+    )
 
-    flops = compute_flops(pixel_values_shape, grid_thw_list)
-    bytes_ = compute_bytes(pixel_values_shape, grid_thw_list)
-
-    AI = flops / bytes_
-
-    achieved_flops = flops / (duration_ms * 1e-3)
-
-    roofline_bound = min(peak_flops, AI * peak_bw)
+    achieved_flops = result.achieved_flops(duration_ms * 1e-3)
 
     print("===== Roofline Analysis =====")
     print(f"Tokens           : {pixel_values_shape[0]}")
-    print(f"FLOPs            : {flops/1e12:.2f} TF")
-    print(f"Bytes (HBM)      : {bytes_/1e9:.2f} GB")
-    print(f"AI               : {AI:.1f} FLOPs/byte")
+    print(f"FLOPs            : {result.flops_per_call/1e12:.2f} TF")
+    print(f"Bytes (HBM)      : {result.bytes_per_call/1e9:.2f} GB")
+    print(f"AI               : {result.arithmetic_intensity:.1f} FLOPs/byte")
     print()
     print(f"Peak Compute     : {peak_flops/1e12:.1f} TF/s")
     print(f"Peak Bandwidth   : {peak_bw/1e9:.1f} GB/s")
-    print(f"Roofline Bound   : {roofline_bound/1e12:.1f} TF/s")
+    print(f"Roofline Bound   : {result.roofline_bound_flops/1e12:.1f} TF/s")
     print(f"Achieved         : {achieved_flops/1e12:.1f} TF/s")
     print()
-    if AI * peak_bw < peak_flops:
-        print("Regime           : Memory-bound")
-    else:
-        print("Regime           : Compute-bound")
+    print(f"Regime           : {result.regime}")
