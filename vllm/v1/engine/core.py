@@ -288,7 +288,7 @@ class EngineCore:
         """
 
         begin_ts_sec = time.time()
-        cuda_profiling_context = get_cuda_profiling_context
+        cuda_profiling_context = get_cuda_profiling_context()
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
