@@ -108,7 +108,7 @@ from vllm.v1.worker.ubatch_splitting import (check_ubatch_thresholds,
                                              ubatch_split)
 from vllm.v1.worker.ubatch_utils import UBatchSlice, UBatchSlices
 from vllm.v1.worker.utils import is_residual_scattered_for_sp
-from vllm.utils.cuda_profiling import CudaProfilingContext, GpuModelRunnerStatistics, CudaGraphKey, MMEncoderStatistics
+from vllm.utils.cuda_profiling import CudaProfilingContext, GpuModelRunnerStatistics, CudaGraphKey, MMEncoderStatistics, get_cuda_profiling_context
 
 from .utils import (AttentionGroup, MultiModalBudget,
                     add_kv_sharing_layers_to_kv_cache_groups, bind_kv_cache,
@@ -1539,7 +1539,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         return mm_kwargs, mm_hashes_pos
 
     def _execute_mm_encoder(self, scheduler_output: "SchedulerOutput"):
-        cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
+        cuda_profiling_context: CudaProfilingContext = get_cuda_profiling_context()
         cuda_profiling_context.mm_encoder_statistics = None
 
         # Batch the multi-modal inputs using the helper method.
@@ -2263,7 +2263,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, AsyncModelRunnerOutput, IntermediateTensors]:
-        cuda_profiling_context: CudaProfilingContext = self.cuda_profiling_context
+        cuda_profiling_context: CudaProfilingContext = get_cuda_profiling_context()
     
         with record_function_or_nullcontext("Preprocess"):
             with self.synchronize_input_prep():

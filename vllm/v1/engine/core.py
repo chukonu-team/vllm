@@ -170,9 +170,8 @@ class EngineCore:
         self.step_fn = (self.step if self.batch_queue is None else
                         self.step_with_batch_queue)
 
-        self.cuda_profiling_context = CudaProfilingContext()
+        init_cuda_profiling_context()
         assert(isinstance(self.model_executor, UniProcExecutor))
-        self.model_executor.driver_worker.worker.model_runner.cuda_profiling_context = self.cuda_profiling_context
         self.profiling_statitics_dump_to_stdout = int(os.environ.get("MY_VLLM_PROFILING_STATISTICS_DISPLAY_TO_STDOUT", "0")) > 0
         self.profiling_statitics_path = os.environ.get("MY_VLLM_PROFILING_STATISTICS_PATH", "profiling_statitics.json")
         self.profiling_statitics_fileh = open(self.profiling_statitics_path, "w", buffering=4096)
@@ -289,7 +288,7 @@ class EngineCore:
         """
 
         begin_ts_sec = time.time()
-        cuda_profiling_context = self.cuda_profiling_context
+        cuda_profiling_context = get_cuda_profiling_context
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.

@@ -52,3 +52,14 @@ class StepStatistics:
     model_forward_time_ms: float
     model_postprocess_time_ms: float
     step_timestamp: float
+
+_cuda_profiling_context: Optional[CudaProfilingContext] = None
+
+def init_cuda_profiling_context():
+    global _cuda_profiling_context
+    assert(_cuda_profiling_context is None)
+    _cuda_profiling_context = CudaProfilingContext()
+
+def get_cuda_profiling_context():
+    assert(_cuda_profiling_context is not None)
+    return _cuda_profiling_context
