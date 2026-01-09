@@ -2,12 +2,16 @@ import os
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 import torch
-from mineru.backend.vlm.vlm_analyze import ModelSingleton
-mineru_model = ModelSingleton().get_model("vllm-engine", None, None)
-llm = mineru_model.client.vllm_llm
+#from mineru.backend.vlm.vlm_analyze import ModelSingleton
+#mineru_model = ModelSingleton().get_model("vllm-engine", None, None)
+#llm = mineru_model.client.vllm_llm
+
+from vllm.utils.mybench_utils import initialize_fake_worker
+
+driver_worker = initialize_fake_worker()
 
 # 最顶层模型被vllm.compilation.cuda_graph.CUDAGraphWrapper盖住了
-llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+llm_model = driver_worker.model_runner.model
 
 # vllm.model_executor.models.qwen2_vl.Qwen2VLForConditionalGeneration
 llm_model_inner = llm_model.runnable
