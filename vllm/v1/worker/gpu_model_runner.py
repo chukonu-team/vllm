@@ -1594,10 +1594,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 # each of shape (feature_size, hidden_size) in case the feature
                 # size is dynamic depending on the input multimodal items.
                 assert(cuda_profiling_context.mm_encoder_statistics is None)
-                cuda_profiling_context.before_mm_encode.record()
-                curr_group_outputs = model.get_multimodal_embeddings(
-                    **mm_kwargs_group)
-                cuda_profiling_context.after_mm_encode.record()
                 request_ids: list[str] = list(scheduler_output.scheduled_encoder_inputs)
                 per_request_num_images: list[int] = [len(scheduler_output.scheduled_encoder_inputs[req]) for req in request_ids]
                 if isinstance(mm_kwargs_group["pixel_values"], torch.Tensor):
@@ -1606,19 +1602,22 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     assert(len(pixel_values_shape) == 3)
                     num_images = pixel_values_shape[0]
                     img_hw = pixel_values_shape[1:]
-                    input_shapes: list[list[int]] = [img_hw for i in range(num_images)]
+                    per_request_pixel_values_shape: list[list[int]] = [img_hw for i in range(num_images)]
                 else:
                     # 不同图片分辨率
                     assert(isinstance(mm_kwargs_group["pixel_values"][0], torch.Tensor))
                     assert(len(mm_kwargs_group["pixel_values"][0].shape) == 2)
-                    input_shapes: list[list[int]] = [list(x.shape) for x in mm_kwargs_group["pixel_values"]]
-                
-                cuda_profiling_context.mm_encoder_statistics = MMEncoderStatistics(
+                    per_request_pixel_values_shape: list[list[int]] = [list(x.shape) for x in mm_kwargs_group["pixel_values"]]
+
+                mm_encoder_statistics = MMEncoderStatistics(
                     request_ids=request_ids,
                     per_request_num_images=per_request_num_images,
-                    input_shapes=input_shapes,
-                    time_ms=0.0
+                    per_request_pixel_values_shape=per_request_pixel_values_shape,
                 )
+                cuda_profiling_context.mm_encoder_statistics = mm_encoder_statistics
+                curr_group_outputs = model.get_multimodal_embeddings(
+                    **mm_kwargs_group)
+
 
             sanity_check_mm_encoder_outputs(
                 curr_group_outputs,

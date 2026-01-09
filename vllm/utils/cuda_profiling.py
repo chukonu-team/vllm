@@ -1,7 +1,7 @@
 import torch
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 class CudaProfilingContext:
     def __init__(self):
@@ -20,8 +20,10 @@ class CudaProfilingContext:
 class MMEncoderStatistics:
     request_ids: list[str]
     per_request_num_images: list[int]
-    input_shapes: list[list[int]]
-    time_ms: float
+    per_request_pixel_values_shape: list[list[int]]
+    model_pixel_values_shape: Optional[Tuple[int, int]] = None
+    model_grid_thw_list: Optional[list[list[int]]] = None
+    time_ms: Optional[float] = None
 
 @dataclass
 class CudaGraphKey:

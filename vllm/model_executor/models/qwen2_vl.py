@@ -75,6 +75,7 @@ from .utils import (AutoWeightsLoader, WeightsMapper,
                     init_vllm_registered_model, maybe_prefix,
                     merge_multimodal_embeddings)
 from .vision import get_vit_attn_backend, run_dp_sharded_mrope_vision_model
+from vllm.utils.cuda_profiling import get_cuda_profiling_context
 
 logger = init_logger(__name__)
 
@@ -1382,8 +1383,13 @@ class Qwen2VLForConditionalGeneration(nn.Module, SupportsMultiModal,
                                                          grid_thw_list,
                                                          rope_type="rope_3d")
             else:
+                cuda_profiling_context = get_cuda_profiling_context()
+                cuda_profiling_context.mm_encoder_statistics.model_pixel_values_shape = pixel_values.shape
+                cuda_profiling_context.mm_encoder_statistics.model_grid_thw_list = [list(x) for x in grid_thw_list]
+                cuda_profiling_context.before_mm_encode.record()
                 image_embeds = self.visual(pixel_values,
                                            grid_thw=grid_thw_list)
+                cuda_profiling_context.after_mm_encode.record()
 
         # Split concatenated embeddings for each image item.
         merge_size = self.visual.spatial_merge_size
