@@ -452,14 +452,13 @@ class ToyPiecewiseCompileInterpreter(torch.fx.Interpreter):
 
                 # resolve the static graph wrapper class (e.g. CUDAGraphWrapper
                 # class) as platform dependent.
-                static_graph_wrapper_class = resolve_obj_by_qualname(
-                    current_platform.get_static_graph_wrapper_cls())
+                from vllm.compilation.cuda_graph import ToyCUDAGraphWrapper
 
                 # Always assign PIECEWISE runtime mode to the
                 # CUDAGraphWrapper for piecewise_backend, to distinguish
                 # it from the FULL cudagraph runtime mode, no matter it
                 # is wrapped on a full or piecewise fx graph.
-                self.module.__dict__[target] = static_graph_wrapper_class(
+                self.module.__dict__[target] = ToyCUDAGraphWrapper(
                     runnable=piecewise_backend,
                     vllm_config=self.vllm_config,
                     runtime_mode=CUDAGraphMode.PIECEWISE,
