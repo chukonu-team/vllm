@@ -13,6 +13,7 @@ from vllm.beam_search import (BeamSearchInstance, BeamSearchOutput,
                               create_sort_beams_key_function)
 from vllm.config import (CompilationConfig, ModelDType,
                          StructuredOutputsConfig, TokenizerMode, is_init_field)
+from vllm.config.compilation import CUDAGraphMode
 from vllm.engine.arg_utils import (ConvertOption, EngineArgs, HfOverrides,
                                    PoolerConfig, RunnerOption)
 from vllm.entrypoints.chat_utils import (ChatCompletionMessageParam,
@@ -190,7 +191,7 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.model_executor.models.qwen2_vl import Qwen2VisionTransformer
 from vllm.v1.worker.gpu_worker import Worker
 from vllm.utils import get_distributed_init_method, get_ip, get_open_port, run_method
-from vllm.config import set_current_vllm_config
+from vllm.config import set_current_vllm_config, VllmConfig
 
 def initialize_fake_worker():
     # /home/ubuntu/.cache/huggingface/hub/models--opendatalab--MinerU2.5-2509-1.2B/snapshots/879e58bdd9566632b27a8a81f0e2961873311f67
@@ -198,8 +199,11 @@ def initialize_fake_worker():
     device = "cuda"
     kwargs = {'gpu_memory_utilization': 0.5, 'model': model_path}
     kwargs["logits_processors"] = [MinerULogitsProcessor]
+    kwargs["compilation_config"] = {"cudagraph_mode": CUDAGraphMode.NONE}
     engine_args = create_engine_args(**kwargs)
-    vllm_config = engine_args.create_engine_config(UsageContext.LLM_CLASS)
+    vllm_config: VllmConfig = engine_args.create_engine_config(UsageContext.LLM_CLASS)
+    compilation_config: CompilationConfig = vllm_config.compilation_config
+    compilation_config.splitting_ops.append("xformers_flash3.flash_fwd")
     distributed_init_method = get_distributed_init_method(get_ip(), get_open_port())
     worker_kwargs = dict(
         vllm_config=vllm_config,
@@ -212,4 +216,4 @@ def initialize_fake_worker():
         worker = Worker(**worker_kwargs)
         worker.init_device()    
         worker.load_model()
-    return worker
+    return worker, vllm_config

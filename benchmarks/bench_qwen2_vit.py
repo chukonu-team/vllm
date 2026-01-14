@@ -7,14 +7,20 @@ import torch
 #llm = mineru_model.client.vllm_llm
 
 from vllm.utils.mybench_utils import initialize_fake_worker
+from vllm.compilation.backends import ToyVllmBackend
 
-driver_worker = initialize_fake_worker()
+use_cudagraph = False
+driver_worker, vllm_config = initialize_fake_worker()
 
 # 最顶层模型被vllm.compilation.cuda_graph.CUDAGraphWrapper盖住了
 llm_model = driver_worker.model_runner.model
 
 # vllm.model_executor.models.qwen2_vl.Qwen2VLForConditionalGeneration
-llm_model_inner = llm_model.runnable
+if use_cudagraph:
+    llm_model_inner = llm_model.runnable
+else:
+    llm_model_inner = llm_model
+
 type(llm_model_inner)
 
 # 可见没有被CUDA Graph盖住
@@ -22,6 +28,15 @@ type(llm_model_inner)
 vit_model = llm_model_inner.visual
 type(vit_model)
 assert(vit_model.training == False)
+
+# 编译vit_model.forward方法
+if True:
+    # vllm.compilation.backends.VllmBackend
+    backend = ToyVllmBackend(vllm_config)
+    print("编译中...")
+    vit_model.forward_compiled = torch.compile(vit_model.forward_compiled, fullgraph=True, backend=backend, options=None)
+    # original_code_object = vit_model.__class__.forward.__code__
+    print("编译完成...")
 
 # 编译通过@support_torch_compile触发
 pixel_values_shape = (5476, 1176)

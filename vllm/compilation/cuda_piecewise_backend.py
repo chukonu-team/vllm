@@ -89,32 +89,8 @@ class ToyPiecewiseBackend:
             self.check_for_ending_compilation()
             return self.compiled_graph_for_general_shape(*args)
 
-        runtime_shape = args[self.sym_shape_indices[0]]
-
-        if runtime_shape not in self.concrete_size_entries:
-            # we don't need to do anything for this shape
-            return self.compiled_graph_for_general_shape(*args)
-
-        entry = self.concrete_size_entries[runtime_shape]
-
-        if not entry.compiled:
-            entry.compiled = True
-            self.to_be_compiled_sizes.remove(runtime_shape)
-            # args are real arguments
-            entry.runnable = self.vllm_backend.compiler_manager.compile(
-                self.graph,
-                args,
-                self.compilation_config.inductor_compile_config,
-                self.compilation_config,
-                graph_index=self.piecewise_compile_index,
-                num_graphs=self.total_piecewise_compiles,
-                runtime_shape=runtime_shape)
-
-            # finished compilations for all required shapes
-            if self.is_last_graph and not self.to_be_compiled_sizes:
-                self.check_for_ending_compilation()
-
-        return entry.runnable(*args)
+        # Toy实现不考虑动态维度的情况
+        return self.compiled_graph_for_general_shape(*args)
 
 
 class PiecewiseBackend:
