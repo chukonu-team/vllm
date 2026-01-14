@@ -648,3 +648,254 @@ class VllmBackend:
             return self.split_gm(*list_args)
 
         return copy_and_call
+
+class ToyVllmBackend:
+    """The compilation backend for `torch.compile` with vLLM.
+    It is used for compilation level of `CompilationLevel.PIECEWISE`,
+    where we customize the compilation.
+
+    The major work of this backend is to split the graph into
+    piecewise graphs, and pass them to the piecewise backend.
+
+    This backend also adds the PostGradPassManager to Inductor config,
+    which handles the post-grad passes.
+    """
+
+    vllm_config: VllmConfig
+    compilation_config: CompilationConfig
+    _called: bool = False
+    # the graph we compiled
+    graph: fx.GraphModule
+    # the stiching graph module for all the piecewise graphs
+    split_gm: fx.GraphModule
+    piecewise_graphs: list[SplitItem]
+    returned_callable: Callable
+    # Inductor passes to run on the graph pre-defunctionalization
+    post_grad_passes: Sequence[Callable]
+    sym_tensor_indices: list[int]
+    input_buffers: list[torch.Tensor]
+    compiler_manager: CompilerManager
+
+    def __init__(
+        self,
+        vllm_config: VllmConfig,
+        prefix: str = "",
+    ):
+
+        # if the model is initialized with a non-empty prefix,
+        # then usually it's enough to use that prefix,
+        # e.g. language_model, vision_model, etc.
+        # when multiple parts are initialized as independent
+        # models, we need to use the model_tag to distinguish
+        # them, e.g. backbone (default), eagle_head, etc.
+        self.prefix = prefix or model_tag
+
+        # Passes to run on the graph post-grad.
+        self.post_grad_pass_manager = PostGradPassManager()
+
+        self.sym_tensor_indices = []
+        self.input_buffers = []
+
+        self.vllm_config = vllm_config
+        self.compilation_config = vllm_config.compilation_config
+
+        self.compiler_manager: CompilerManager = CompilerManager(
+            self.compilation_config)
+
+        # `torch.compile` is JIT compiled, so we don't need to
+        # do anything here
+
+    def configure_post_pass(self):
+        config = self.compilation_config
+        self.post_grad_pass_manager.configure(self.vllm_config)
+
+        # Post-grad custom passes are run using the post_grad_custom_post_pass
+        # hook. If a pass for that hook exists, add it to the pass manager.
+        inductor_config = config.inductor_compile_config
+        PASS_KEY = "post_grad_custom_post_pass"
+        if PASS_KEY in inductor_config:
+            if isinstance(inductor_config[PASS_KEY], PostGradPassManager):
+                # PassManager already added to config, make sure it's correct
+                assert (inductor_config[PASS_KEY].uuid() ==
+                        self.post_grad_pass_manager.uuid())
+            else:
+                # Config should automatically wrap all inductor passes
+                assert isinstance(inductor_config[PASS_KEY], InductorPass)
+                self.post_grad_pass_manager.add(inductor_config[PASS_KEY])
+        inductor_config[PASS_KEY] = self.post_grad_pass_manager
+
+    def __call__(self, graph: fx.GraphModule, example_inputs) -> Callable:
+
+        vllm_config = self.vllm_config
+        if not self.compilation_config.cache_dir:
+            # no provided cache dir, generate one based on the known factors
+            # that affects the compilation. if none of the factors change,
+            # the cache dir will be the same so that we can reuse the compiled
+            # graph.
+
+            factors = []
+            # 0. factors come from the env, for example, The values of
+            # VLLM_PP_LAYER_PARTITION will affect the computation graph.
+            env_hash = envs.compute_hash()
+            factors.append(env_hash)
+
+            # 1. factors come from the vllm_config (it mainly summarizes how the
+            #    model is created)
+            config_hash = vllm_config.compute_hash()
+            factors.append(config_hash)
+
+            # 2. factors come from the code files that are traced by Dynamo (
+            #    it mainly summarizes how the model is used in forward pass)
+            forward_code_files = list(
+                sorted(self.compilation_config.traced_files))
+            self.compilation_config.traced_files.clear()
+            logger.debug(
+                "Traced files (to be considered for compilation cache):\n%s",
+                "\n".join(forward_code_files))
+            hash_content = []
+            for filepath in forward_code_files:
+                hash_content.append(filepath)
+                if filepath == "<string>":
+                    # This means the function was dynamically generated, with
+                    # e.g. exec(). We can't actually check these.
+                    continue
+                with open(filepath) as f:
+                    hash_content.append(f.read())
+            import hashlib
+            code_hash = hashlib.md5("\n".join(hash_content).encode(),
+                                    usedforsecurity=False).hexdigest()
+            factors.append(code_hash)
+
+            # 3. compiler hash
+            compiler_hash = self.compiler_manager.compute_hash(vllm_config)
+            factors.append(compiler_hash)
+
+            # combine all factors to generate the cache dir
+            hash_key = hashlib.md5(str(factors).encode(),
+                                   usedforsecurity=False).hexdigest()[:10]
+
+            cache_dir = os.path.join(
+                envs.VLLM_CACHE_ROOT,
+                "torch_compile_cache",
+                hash_key,
+            )
+            self.compilation_config.cache_dir = cache_dir
+
+        cache_dir = self.compilation_config.cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+        self.compilation_config.cache_dir = cache_dir
+        rank = vllm_config.parallel_config.rank
+        dp_rank = vllm_config.parallel_config.data_parallel_rank
+        local_cache_dir = os.path.join(cache_dir, f"rank_{rank}_{dp_rank}",
+                                       self.prefix)
+        os.makedirs(local_cache_dir, exist_ok=True)
+        self.compilation_config.local_cache_dir = local_cache_dir
+
+        disable_cache = envs.VLLM_DISABLE_COMPILE_CACHE
+
+        if disable_cache:
+            logger.info("vLLM's torch.compile cache is disabled.")
+        else:
+            logger.info("Using cache directory: %s for vLLM's torch.compile",
+                        local_cache_dir)
+
+        self.compiler_manager.initialize_cache(local_cache_dir, disable_cache,
+                                               self.prefix)
+
+        # when dynamo calls the backend, it means the bytecode
+        # transform and analysis are done
+        compilation_counter.num_graphs_seen += 1
+        from .monitor import torch_compile_start_time
+        dynamo_time = time.time() - torch_compile_start_time
+        logger.info("Dynamo bytecode transform time: %.2f s", dynamo_time)
+        self.compilation_config.compilation_time += dynamo_time
+
+        # we control the compilation process, each instance can only be
+        # called once
+        assert not self._called, "VllmBackend can only be called once"
+
+        self.graph = graph
+        self.configure_post_pass()
+
+        self.split_gm, self.piecewise_graphs = split_graph(
+            graph, self.compilation_config.splitting_ops)
+
+        from torch._dynamo.utils import lazy_format_graph_code
+
+        # depyf will hook lazy_format_graph_code and dump the graph
+        # for debugging, no need to print the graph here
+        lazy_format_graph_code("before split", self.graph)
+        lazy_format_graph_code("after split", self.split_gm)
+
+        compilation_counter.num_piecewise_graphs_seen += len(
+            self.piecewise_graphs)
+        submod_names_to_compile = [
+            item.submod_name for item in self.piecewise_graphs
+            if not item.is_splitting_graph
+        ]
+
+        # propagate the split graph to the piecewise backend,
+        # compile submodules with symbolic shapes
+        PiecewiseCompileInterpreter(self.split_gm, submod_names_to_compile,
+                                    self.vllm_config,
+                                    self).run(*example_inputs)
+
+        graph_path = os.path.join(local_cache_dir, "computation_graph.py")
+        if not os.path.exists(graph_path):
+            # code adapted from https://github.com/thuml/depyf/blob/dab831108a752d1facc00acdd6d4243891845c37/depyf/explain/patched_lazy_format_graph_code.py#L30 # noqa
+            # use `print_readable` because it can include submodules
+            src = "from __future__ import annotations\nimport torch\n" + \
+                self.split_gm.print_readable(print_output=False)
+            src = src.replace("<lambda>", "GraphModule")
+            with open(graph_path, "w") as f:
+                f.write(src)
+
+            logger.debug("Computation graph saved to %s", graph_path)
+
+        self._called = True
+
+        if self.compilation_config.cudagraph_mode == CUDAGraphMode.NONE or \
+            not self.compilation_config.cudagraph_copy_inputs:
+            return self.split_gm
+
+        # if we need to copy input buffers for cudagraph
+        from torch._guards import detect_fake_mode
+        fake_mode = detect_fake_mode()
+        fake_args = [
+            fake_mode.from_tensor(t) if isinstance(t, torch.Tensor) else t
+            for t in example_inputs
+        ]
+
+        # index of tensors that have symbolic shapes (batch size)
+        # for weights and static buffers, they will have concrete shapes.
+        # symbolic shape only happens for input tensors.
+        from torch.fx.experimental.symbolic_shapes import is_symbolic
+        self.sym_tensor_indices = [
+            i for i, x in enumerate(fake_args)
+            if isinstance(x, torch._subclasses.fake_tensor.FakeTensor) and \
+                any(is_symbolic(d) for d in x.size())
+        ]
+
+        # compiler managed cudagraph input buffers
+        # we assume the first run with symbolic shapes
+        # has the maximum size among all the tensors
+        self.input_buffers = [
+            example_inputs[x].clone() for x in self.sym_tensor_indices
+        ]
+
+        # this is the callable we return to Dynamo to run
+        def copy_and_call(*args):
+            list_args = list(args)
+            for i, index in enumerate(self.sym_tensor_indices):
+                runtime_tensor = list_args[index]
+                runtime_shape = runtime_tensor.shape[0]
+                static_tensor = self.input_buffers[i][:runtime_shape]
+
+                # copy the tensor to the static buffer
+                static_tensor.copy_(runtime_tensor)
+
+                # replace the tensor in the list_args to the static buffer
+                list_args[index] = static_tensor
+            return self.split_gm(*list_args)
+
+        return copy_and_call
