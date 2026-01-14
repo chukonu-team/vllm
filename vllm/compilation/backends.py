@@ -379,6 +379,102 @@ class PiecewiseCompileInterpreter(torch.fx.Interpreter):
         return output
 
 
+class ToyPiecewiseCompileInterpreter(torch.fx.Interpreter):
+    """Code adapted from `torch.fx.passes.shape_prop.ShapeProp`.
+    It runs the given graph with fake inputs, and compile some
+    submodules specified by `compile_submod_names` with the given
+    compilation configs.
+
+    NOTE: the order in `compile_submod_names` matters, because
+    it will be used to determine the order of the compiled piecewise
+    graphs. The first graph will handle logging, and the last graph
+    has some special cudagraph output handling.
+    """
+
+    def __init__(self, module: torch.fx.GraphModule,
+                 compile_submod_names: list[str], vllm_config: VllmConfig,
+                 vllm_backend: "VllmBackend"):
+        super().__init__(module)
+        from torch._guards import detect_fake_mode
+        self.fake_mode = detect_fake_mode()
+        self.compile_submod_names = compile_submod_names
+        self.compilation_config = vllm_config.compilation_config
+        self.vllm_config = vllm_config
+        self.vllm_backend = vllm_backend
+        # When True, it annoyingly dumps the torch.fx.Graph on errors.
+        self.extra_traceback = False
+
+    def run(self, *args):
+        fake_args = [
+            self.fake_mode.from_tensor(t) if isinstance(t, torch.Tensor) else t
+            for t in args
+        ]
+        with self.fake_mode, enable_python_dispatcher():
+            return super().run(*fake_args)
+
+    def call_module(self, target: torch.fx.node.Target,
+                    args: tuple[torch.fx.node.Argument,
+                                ...], kwargs: dict[str, Any]) -> Any:
+        assert isinstance(target, str)
+        output = super().call_module(target, args, kwargs)
+
+        if target in self.compile_submod_names:
+            index = self.compile_submod_names.index(target)
+            submod = self.fetch_attr(target)
+            sym_shape_indices = [
+                i for i, x in enumerate(args) if isinstance(x, torch.SymInt)
+            ]
+            global compilation_start_time
+
+            compiled_graph_for_dynamic_shape = self.vllm_backend.\
+                compiler_manager.compile(
+                submod,
+                args,
+                self.compilation_config.inductor_compile_config,
+                self.compilation_config,
+                graph_index=index,
+                num_graphs=len(self.compile_submod_names),
+                runtime_shape=None)
+            # Lazy import here to avoid circular import
+            from .cuda_piecewise_backend import PiecewiseBackend
+
+            piecewise_backend = PiecewiseBackend(
+                submod, self.vllm_config, index,
+                len(self.compile_submod_names), sym_shape_indices,
+                compiled_graph_for_dynamic_shape, self.vllm_backend)
+
+            if (self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+                    and
+                    not self.compilation_config.use_inductor_graph_partition):
+                # We're using Dynamo-based piecewise splitting, so we wrap
+                # the whole subgraph with a static graph wrapper.
+                from .cuda_graph import CUDAGraphOptions
+
+                # resolve the static graph wrapper class (e.g. CUDAGraphWrapper
+                # class) as platform dependent.
+                static_graph_wrapper_class = resolve_obj_by_qualname(
+                    current_platform.get_static_graph_wrapper_cls())
+
+                # Always assign PIECEWISE runtime mode to the
+                # CUDAGraphWrapper for piecewise_backend, to distinguish
+                # it from the FULL cudagraph runtime mode, no matter it
+                # is wrapped on a full or piecewise fx graph.
+                self.module.__dict__[target] = static_graph_wrapper_class(
+                    runnable=piecewise_backend,
+                    vllm_config=self.vllm_config,
+                    runtime_mode=CUDAGraphMode.PIECEWISE,
+                    cudagraph_options=CUDAGraphOptions(
+                        debug_log_enable=piecewise_backend.is_first_graph,
+                        gc_disable=not piecewise_backend.is_first_graph,
+                        weak_ref_output=piecewise_backend.is_last_graph))
+            else:
+                self.module.__dict__[target] = piecewise_backend
+
+            compilation_counter.num_piecewise_capturable_graphs_seen += 1
+
+        return output
+
+
 # the tag for the part of model being compiled,
 # e.g. backbone/eagle_head
 model_tag: str = "backbone"
