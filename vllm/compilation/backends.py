@@ -436,9 +436,9 @@ class ToyPiecewiseCompileInterpreter(torch.fx.Interpreter):
                 num_graphs=len(self.compile_submod_names),
                 runtime_shape=None)
             # Lazy import here to avoid circular import
-            from .cuda_piecewise_backend import PiecewiseBackend
+            from .cuda_piecewise_backend import ToyPiecewiseBackend
 
-            piecewise_backend = PiecewiseBackend(
+            piecewise_backend = ToyPiecewiseBackend(
                 submod, self.vllm_config, index,
                 len(self.compile_submod_names), sym_shape_indices,
                 compiled_graph_for_dynamic_shape, self.vllm_backend)
@@ -932,7 +932,7 @@ class ToyVllmBackend:
 
         # propagate the split graph to the piecewise backend,
         # compile submodules with symbolic shapes
-        PiecewiseCompileInterpreter(self.split_gm, submod_names_to_compile,
+        ToyPiecewiseCompileInterpreter(self.split_gm, submod_names_to_compile,
                                     self.vllm_config,
                                     self).run(*example_inputs)
 
