@@ -76,6 +76,7 @@ from .utils import (AutoWeightsLoader, WeightsMapper,
                     merge_multimodal_embeddings)
 from .vision import get_vit_attn_backend, run_dp_sharded_mrope_vision_model
 from vllm.utils.cuda_profiling import get_cuda_profiling_context
+from vllm.compilation.decorators import support_torch_compile
 
 logger = init_logger(__name__)
 
@@ -712,30 +713,19 @@ class Qwen2VisionTransformer(nn.Module):
             seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
         return max_seqlen, seqlens
 
-    def forward(
+    def forward_compiled(
         self,
         x: torch.Tensor,
-        grid_thw: list[list[int]],
+        rotary_pos_emb: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        max_seqlen: Optional[int],
+        seqlens: Optional[list[int]],
     ) -> torch.Tensor:
-        # patchify
-        x = x.to(device=self.device, dtype=self.dtype)
         x = self.patch_embed(x)
-
-        # compute position embedding
-        rotary_pos_emb = self.rot_pos_emb(grid_thw)
-
-        # compute cu_seqlens
-        grid_thw_ = torch.tensor(grid_thw)
-        cu_seqlens = torch.repeat_interleave(grid_thw_[:, 1] * grid_thw_[:, 2],
-                                             grid_thw_[:, 0]).cumsum(
-                                                 dim=0, dtype=torch.int32)
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), "constant", 0)
 
         # transformers
         x = x.unsqueeze(1)
 
-        # pre-compute seqlens for attn mask to reduce cuMemcpy operations
-        max_seqlen, seqlens = self.compute_attn_mask_seqlen(cu_seqlens)
         for blk in self.blocks:
             x = blk(
                 x,
@@ -749,6 +739,29 @@ class Qwen2VisionTransformer(nn.Module):
         x = self.merger(x)
 
         return x
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        grid_thw: list[list[int]],
+    ) -> torch.Tensor:
+        # compute position embedding
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+
+        # compute cu_seqlens
+        grid_thw_ = torch.tensor(grid_thw)
+        cu_seqlens = torch.repeat_interleave(grid_thw_[:, 1] * grid_thw_[:, 2],
+                                             grid_thw_[:, 0]).cumsum(
+                                                 dim=0, dtype=torch.int32)
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), "constant", 0)
+        
+        # pre-compute seqlens for attn mask to reduce cuMemcpy operations
+        max_seqlen, seqlens = self.compute_attn_mask_seqlen(cu_seqlens)
+
+        # patchify
+        x = x.to(device=self.device, dtype=self.dtype)
+
+        return self.forward_compiled(x, rotary_pos_emb, cu_seqlens, max_seqlen, seqlens)
 
     def load_weights(self, weights: Iterable[tuple[str,
                                                    torch.Tensor]]) -> set[str]:
