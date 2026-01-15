@@ -426,11 +426,14 @@ class ToyPiecewiseCompileInterpreter(torch.fx.Interpreter):
             ]
             global compilation_start_time
 
+            inductor_compile_config = self.compilation_config.inductor_compile_config
+            inductor_compile_config["max_autotune"] = True
+            inductor_compile_config["coordinate_descent_tuning"] = True
             compiled_graph_for_dynamic_shape = self.vllm_backend.\
                 compiler_manager.compile(
                 submod,
                 args,
-                self.compilation_config.inductor_compile_config,
+                inductor_compile_config,
                 self.compilation_config,
                 graph_index=index,
                 num_graphs=len(self.compile_submod_names),
