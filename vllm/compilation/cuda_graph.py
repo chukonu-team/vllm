@@ -39,6 +39,15 @@ class CUDAGraphOptions:
     gc_disable: bool = False
     weak_ref_output: bool = True
 
+# 第一次调用的时候关闭CUDA Graph以做编译
+_toy_cuda_graph_enabled = False
+
+def is_toy_cuda_graph_enabled():
+    return _toy_cuda_graph_enabled
+
+def enable_toy_cuda_graph():
+    global _toy_cuda_graph_enabled
+    _toy_cuda_graph_enabled = True
 
 class ToyCUDAGraphWrapper:
     def __init__(self,
@@ -82,11 +91,13 @@ class ToyCUDAGraphWrapper:
         return self.runnable
 
     def __call__(self, *args, **kwargs):
-        forward_context = get_forward_context()
-        batch_descriptor = forward_context.batch_descriptor
-        cudagraph_runtime_mode = forward_context.cudagraph_runtime_mode
+        # Toy实现暂时硬编码
+        toy_cuda_graph_enabled = is_toy_cuda_graph_enabled()
+        batch_descriptor = BatchDescriptor(0, False)
+        cudagraph_runtime_mode = self.runtime_mode
+        assert(cudagraph_runtime_mode != CUDAGraphMode.NONE)
 
-        if cudagraph_runtime_mode == CUDAGraphMode.NONE or \
+        if (not toy_cuda_graph_enabled) or cudagraph_runtime_mode == CUDAGraphMode.NONE or \
                             cudagraph_runtime_mode != self.runtime_mode:
             # CUDAGraphMode.NONE could mean the profile run, a warmup run, or
             # running without cudagraphs.

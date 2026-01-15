@@ -33,20 +33,26 @@ assert(vit_model.training == False)
 if True:
     # vllm.compilation.backends.VllmBackend
     backend = ToyVllmBackend(vllm_config)
-    print("编译中...")
     vit_model.forward_compiled = torch.compile(vit_model.forward_compiled, fullgraph=True, backend=backend, options=None)
     # original_code_object = vit_model.__class__.forward.__code__
-    print("编译完成...")
 
 # 编译通过@support_torch_compile触发
 pixel_values_shape = (5476, 1176)
 grid_thw_list = [[1, 74, 74]]
 
+print("首次执行，可能引入编译...")
+
 # 执行一次inference
 with torch.inference_mode():
     pixel_values = torch.randn(5476, 1176, device='cuda')
     image_embeds = vit_model(pixel_values, grid_thw=grid_thw_list)
-    
+
+print("首次执行完成")
+
+from vllm.compilation.cuda_graph import enable_toy_cuda_graph
+
+enable_toy_cuda_graph()
+
 # 执行一个微观测试程序
 
 import torch
@@ -62,11 +68,15 @@ assert(all(p.device.type == "cuda" for p in vit_model.parameters()))
 pixel_values = torch.randn(5476, 1176, device="cuda")
 grid_thw_list = [[1, 74, 74]]
 
+print("预热中...")
+
 # ---------- warmup ----------
 with torch.inference_mode():
     for _ in range(20):
         _ = vit_model(pixel_values, grid_thw=grid_thw_list)       
 torch.cuda.synchronize()
+
+print("预热完成")
 
 # ---------- benchmark ----------
 times = []

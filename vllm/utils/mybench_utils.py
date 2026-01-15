@@ -199,7 +199,7 @@ def initialize_fake_worker():
     device = "cuda"
     kwargs = {'gpu_memory_utilization': 0.5, 'model': model_path}
     kwargs["logits_processors"] = [MinerULogitsProcessor]
-    kwargs["compilation_config"] = {"cudagraph_mode": CUDAGraphMode.NONE}
+    # kwargs["compilation_config"] = {"cudagraph_mode": CUDAGraphMode.NONE}
     engine_args = create_engine_args(**kwargs)
     vllm_config: VllmConfig = engine_args.create_engine_config(UsageContext.LLM_CLASS)
     compilation_config: CompilationConfig = vllm_config.compilation_config
