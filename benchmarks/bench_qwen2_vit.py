@@ -9,7 +9,26 @@ import torch
 from vllm.utils.mybench_utils import initialize_fake_worker
 from vllm.compilation.backends import ToyVllmBackend
 
+# 是否开启cuda graph
 use_cudagraph = False
+
+# 是否开启编译
+enable_compilation = False
+
+# 如果开启编译，是否启用CUDA Graph
+enable_compilation_with_cudagraph = True
+
+# 是否开启profile（以及profile模式）
+#profile_mode = "ncu"
+profile_mode = None
+
+print(f"enable_compilation = {enable_compilation}")
+
+if enable_compilation:
+    print(f"enable_compilation_with_cudagraph = {enable_compilation_with_cudagraph}")
+
+print(f"profile_mode = {profile_mode}")
+
 driver_worker, vllm_config = initialize_fake_worker()
 
 # 最顶层模型被vllm.compilation.cuda_graph.CUDAGraphWrapper盖住了
@@ -30,7 +49,7 @@ type(vit_model)
 assert(vit_model.training == False)
 
 # 编译vit_model.forward方法
-if True:
+if enable_compilation:
     # vllm.compilation.backends.VllmBackend
     backend = ToyVllmBackend(vllm_config)
     vit_model.forward_compiled = torch.compile(vit_model.forward_compiled, fullgraph=True, backend=backend, options=None)
@@ -51,7 +70,8 @@ print("首次执行完成")
 
 from vllm.compilation.cuda_graph import enable_toy_cuda_graph
 
-enable_toy_cuda_graph()
+if enable_compilation_with_cudagraph:
+    enable_toy_cuda_graph()
 
 # 执行一个微观测试程序
 
@@ -78,23 +98,41 @@ torch.cuda.synchronize()
 
 print("预热完成")
 
-# ---------- benchmark ----------
-times = []
-start = torch.cuda.Event(enable_timing=True)
-end = torch.cuda.Event(enable_timing=True)
+if profile_mode == "ncu":
+    # 对于NCU，采集过程中只需把模型跑一遍即可
 
-with torch.inference_mode():
-    for _ in range(100):
-        torch.cuda.synchronize()
-        start.record()
-        _ = vit_model(pixel_values, grid_thw=grid_thw_list)
-        end.record()
-        torch.cuda.synchronize()
-        times.append(start.elapsed_time(end))  # ms
+    print("执行中...")
+    torch.cuda.profiler.start()
+    with torch.inference_mode():
+        # 执行1遍已经比较长时间了
+        for i in range(1):
+            print(f"执行第{i}遍...")
+            _ = vit_model(pixel_values, grid_thw=grid_thw_list)       
+            torch.cuda.synchronize()
+    torch.cuda.profiler.stop()
 
-times = np.array(times)
+else:
+    torch.cuda.profiler.start()
 
-print(f"mean   : {times.mean():.3f} ms")
-print(f"p50    : {np.percentile(times, 50):.3f} ms")
-print(f"p90    : {np.percentile(times, 90):.3f} ms")
-print(f"p99    : {np.percentile(times, 99):.3f} ms")
+    # ---------- benchmark ----------
+    times = []
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    with torch.inference_mode():
+        for _ in range(100):
+            torch.cuda.synchronize()
+            start.record()
+            _ = vit_model(pixel_values, grid_thw=grid_thw_list)
+            end.record()
+            torch.cuda.synchronize()
+            times.append(start.elapsed_time(end))  # ms
+
+    torch.cuda.profiler.stop()
+
+    times = np.array(times)
+
+    print(f"mean   : {times.mean():.3f} ms")
+    print(f"p50    : {np.percentile(times, 50):.3f} ms")
+    print(f"p90    : {np.percentile(times, 90):.3f} ms")
+    print(f"p99    : {np.percentile(times, 99):.3f} ms")
