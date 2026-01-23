@@ -1,6 +1,7 @@
 import os
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
+import argparse
 import torch
 #from mineru.backend.vlm.vlm_analyze import ModelSingleton
 #mineru_model = ModelSingleton().get_model("vllm-engine", None, None)
@@ -9,18 +10,24 @@ import torch
 from vllm.utils.mybench_utils import initialize_fake_worker
 from vllm.compilation.backends import ToyVllmBackend
 
+# 解析命令行参数
+parser = argparse.ArgumentParser(description='Benchmark Qwen2 Vision Model')
+parser.add_argument('--enable_compilation', action='store_true', default=False,
+                    help='是否开启编译 (默认: False)')
+parser.add_argument('--disable_compilation_cudagraph', action='store_true', default=False,
+                    help='如果开启编译，禁用CUDA Graph (默认启用CUDA Graph)')
+parser.add_argument('--profile_mode', type=str, default=None, choices=['ncu'],
+                    help='是否开启profile（以及profile模式）。可选值: ncu (默认: None)')
+
+args = parser.parse_args()
+
+# 从命令行参数获取配置
+enable_compilation = args.enable_compilation
+enable_compilation_with_cudagraph = not args.disable_compilation_cudagraph
+profile_mode = args.profile_mode
+
 # 是否开启cuda graph
 use_cudagraph = False
-
-# 是否开启编译
-enable_compilation = False
-
-# 如果开启编译，是否启用CUDA Graph
-enable_compilation_with_cudagraph = True
-
-# 是否开启profile（以及profile模式）
-#profile_mode = "ncu"
-profile_mode = None
 
 print(f"enable_compilation = {enable_compilation}")
 
