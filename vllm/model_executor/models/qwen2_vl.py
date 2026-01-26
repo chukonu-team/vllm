@@ -362,30 +362,16 @@ class Qwen2VisionAttention(nn.Module):
         q, k, v = (x.view(*new_shape) for x in (q, k, v))
         return q, k, v
 
-    def forward(
+    @torch.compiler.disable
+    def forward_off_compilation(
             self,
-            x: torch.Tensor,
             cu_seqlens: torch.Tensor,
-            rotary_pos_emb: torch.Tensor,
-            max_seqlen: Optional[int] = None,  # Only used for Flash Attention
-            seqlens: Optional[list[int]] = None,  # Only used for xFormers
+            max_seqlen: Optional[int],
+            seqlens: Optional[list[int]],
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor
     ) -> torch.Tensor:
-
-        # [s, b, c] --> [s, b, 3 * head * head_dim]
-        x, _ = self.qkv(x)
-
-        # [s, b, 3 * head * head_dim] -> 3 * [s, b, head, head_dim]
-        q, k, v = self.split_qkv(x)
-        batch_size = q.shape[1]
-
-        q, k, v = (rearrange(x, "s b ... -> b s ...").contiguous()
-                   for x in (q, k, v))
-        if rotary_pos_emb is not None:
-            # [2 * b, s, heads, head_dim]
-            qk_concat = torch.cat([q, k], dim=0)
-            qk_rotated = apply_rotary_pos_emb_vision(qk_concat, rotary_pos_emb)
-            q, k = torch.chunk(qk_rotated, 2, dim=0)
-
         if self.is_flash_attn_backend:
             if self.attn_backend == _Backend.ROCM_AITER_FA:
                 from aiter import flash_attn_varlen_func
@@ -442,6 +428,34 @@ class Qwen2VisionAttention(nn.Module):
                 q, k, v, attn_bias=attn_bias, p=0, scale=None)
             context_layer = rearrange(context_layer,
                                       "b s h d -> s b (h d)").contiguous()
+
+        return context_layer
+
+    def forward(
+            self,
+            x: torch.Tensor,
+            cu_seqlens: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+            max_seqlen: Optional[int] = None,  # Only used for Flash Attention
+            seqlens: Optional[list[int]] = None,  # Only used for xFormers
+    ) -> torch.Tensor:
+
+        # [s, b, c] --> [s, b, 3 * head * head_dim]
+        x, _ = self.qkv(x)
+
+        # [s, b, 3 * head * head_dim] -> 3 * [s, b, head, head_dim]
+        q, k, v = self.split_qkv(x)
+        batch_size = q.shape[1]
+
+        q, k, v = (rearrange(x, "s b ... -> b s ...").contiguous()
+                   for x in (q, k, v))
+        if rotary_pos_emb is not None:
+            # [2 * b, s, heads, head_dim]
+            qk_concat = torch.cat([q, k], dim=0)
+            qk_rotated = apply_rotary_pos_emb_vision(qk_concat, rotary_pos_emb)
+            q, k = torch.chunk(qk_rotated, 2, dim=0)
+
+        context_layer = self.forward_off_compilation(cu_seqlens, max_seqlen, seqlens, q, k, v)
 
         output, _ = self.proj(context_layer)
         return output
@@ -753,7 +767,7 @@ class Qwen2VisionTransformer(nn.Module):
         cu_seqlens = torch.repeat_interleave(grid_thw_[:, 1] * grid_thw_[:, 2],
                                              grid_thw_[:, 0]).cumsum(
                                                  dim=0, dtype=torch.int32)
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), "constant", 0)
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), "constant", 0).to("cuda")
         
         # pre-compute seqlens for attn mask to reduce cuMemcpy operations
         max_seqlen, seqlens = self.compute_attn_mask_seqlen(cu_seqlens)

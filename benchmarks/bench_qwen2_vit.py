@@ -59,7 +59,7 @@ assert(vit_model.training == False)
 if enable_compilation:
     # vllm.compilation.backends.VllmBackend
     backend = ToyVllmBackend(vllm_config)
-    vit_model.forward_compiled = torch.compile(vit_model.forward_compiled, fullgraph=True, backend=backend, options=None)
+    vit_model.forward_compiled = torch.compile(vit_model.forward_compiled, fullgraph=False, backend=backend, options=None)
     # original_code_object = vit_model.__class__.forward.__code__
 
 # 编译通过@support_torch_compile触发
